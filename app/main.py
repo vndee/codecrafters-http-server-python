@@ -86,13 +86,16 @@ class AsyncHTTPServer:
                 # Find matching route
                 routes = self.routes.get(method)
                 print(routes)
+                response = b''
                 if routes:
+                    matched = False
                     for route in routes:
                         matched, params = route.match(path)
                         if matched:
                             response = route.handler(**params)
                             break
-                    else:
+
+                    if not matched:
                         response = self.create_response('404 Not Found')
                 else:
                     response = self.create_response('404 Not Found')
