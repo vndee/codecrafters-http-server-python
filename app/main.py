@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional, Dict, Callable, Tuple
+from typing import Optional, Dict, Callable, Tuple, List
 from dataclasses import dataclass
 import re
 
@@ -36,13 +36,16 @@ class AsyncHTTPServer:
         self.host = host
         self.port = port
         self.server: Optional[asyncio.Server] = None
-        self.routes: Dict[str, Route] = {}
+        self.routes: Dict[str, List[Route]] = {}
 
     def route(self, method: str, path: str, params: Tuple[str, ...] = ()) -> Callable:
         """Decorator to register routes with the server."""
 
         def decorator(handler: Callable[..., bytes]) -> Callable[..., bytes]:
-            self.routes[method] = Route(path, handler, params)
+            if method not in self.routes:
+                self.routes[method] = []
+
+            self.routes[method].append(Route(path, handler, params))
             return handler
 
         return decorator
@@ -81,12 +84,14 @@ class AsyncHTTPServer:
                 logger.info(f"Received request from {peer_info}: {request_line}")
 
                 # Find matching route
-                route = self.routes.get(method)
-                print(route)
-                if route:
-                    matched, params = route.match(path)
-                    if matched:
-                        response = route.handler(**params)
+                routes = self.routes.get(method)
+                print(routes)
+                if routes:
+                    for route in routes:
+                        matched, params = route.match(path)
+                        if matched:
+                            response = route.handler(**params)
+                            break
                     else:
                         response = self.create_response('404 Not Found')
                 else:
