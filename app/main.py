@@ -1,9 +1,11 @@
+import re
 import asyncio
 import logging
 import argparse
-from typing import Optional, Dict, Callable, Tuple, List
+
 from dataclasses import dataclass
-import re
+from typing import Optional, Dict, Callable, Tuple, List
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,7 +27,6 @@ class Route:
             regex_pattern = regex_pattern.replace(f"{{{param}}}", f"(?P<{param}>[^/]+)")
 
         regex_pattern = f"^{regex_pattern}$"
-        # print(f"Matching {path} against {regex_pattern}")
         match = re.match(regex_pattern, path)
 
         if match:
@@ -49,6 +50,7 @@ class AsyncHTTPServer:
         self.directory = directory
         self.server: Optional[asyncio.Server] = None
         self.routes: Dict[str, List[Route]] = {}
+        self.supported_encodings = ['gzip']
 
     def route(self, method: str, path: str, params: Tuple[str, ...] = ()) -> Callable:
         """Decorator to register routes with the server."""
@@ -62,13 +64,28 @@ class AsyncHTTPServer:
 
         return decorator
 
-    def create_response(self, status: str, headers: Dict[str, str] = None, body: bytes = b'') -> bytes:
+    def should_compress(self, accept_encoding: str) -> bool:
+        """Check if response should be compressed based on Accept-Encoding header."""
+        if not accept_encoding:
+            return False
+
+        # Split the header value and get the first encoding
+        requested_encoding = accept_encoding.split(',')[0].strip().lower()
+        return requested_encoding in self.supported_encodings
+
+    def create_response(self, status: str, headers: Dict[str, str] = None, body: bytes = b'',
+                        accept_encoding: str = None) -> bytes:
         """Create HTTP response with headers and body."""
+        if headers is None:
+            headers = {}
+
+        if self.should_compress(accept_encoding):
+            headers['Content-Encoding'] = 'gzip'
+
         response_lines = [f'HTTP/1.1 {status}']
 
-        if headers:
-            for key, value in headers.items():
-                response_lines.append(f'{key}: {value}')
+        for key, value in headers.items():
+            response_lines.append(f'{key}: {value}')
 
         response_lines.append('')  # Empty line between headers and body
         response = '\r\n'.join(response_lines).encode('utf-8') + b'\r\n'
@@ -110,7 +127,6 @@ class AsyncHTTPServer:
                 method, path, _ = request_line.split(' ')
                 headers = self.parse_headers(request)
                 body = data.split(b'\r\n\r\n', 1)[1] if b'\r\n\r\n' in data else b''
-                print(f"BODY: {body}")
 
                 routes = self.routes.get(method)
                 payload = Request(
@@ -173,15 +189,6 @@ class AsyncHTTPServer:
                 logger.info("Server stopped")
 
 
-async def shutdown(server: AsyncHTTPServer, signal_: asyncio.Event) -> None:
-    """Handle graceful shutdown."""
-    await signal_.wait()
-    logger.info("Shutting down server...")
-    if server.server:
-        server.server.close()
-        await server.server.wait_closed()
-
-
 def create_app(**kwargs) -> AsyncHTTPServer:
     """Create and configure the server application."""
     app = AsyncHTTPServer(**kwargs)
@@ -197,7 +204,8 @@ def create_app(**kwargs) -> AsyncHTTPServer:
             'Content-Type': 'text/plain',
             'Content-Length': str(len(body))
         }
-        return app.create_response('200 OK', headers, body)
+        accept_encoding = request.headers.get('accept-encoding')
+        return app.create_response('200 OK', headers, body, accept_encoding)
 
     @app.route('GET', '/user-agent', ())
     def handle_user_agent(request: Request) -> bytes:
@@ -207,7 +215,8 @@ def create_app(**kwargs) -> AsyncHTTPServer:
             'Content-Type': 'text/plain',
             'Content-Length': str(len(body))
         }
-        return app.create_response('200 OK', headers, body)
+        accept_encoding = request.headers.get('accept-encoding')
+        return app.create_response('200 OK', headers, body, accept_encoding)
 
     @app.route('GET', '/files/{filename}', ('filename',))
     def handle_file(filename: str, request: Request) -> bytes:
@@ -218,7 +227,8 @@ def create_app(**kwargs) -> AsyncHTTPServer:
                     'Content-Type': 'application/octet-stream',
                     'Content-Length': str(len(body))
                 }
-                return app.create_response('200 OK', headers, body)
+                accept_encoding = request.headers.get('accept-encoding')
+                return app.create_response('200 OK', headers, body, accept_encoding)
         except FileNotFoundError:
             return app.create_response('404 Not Found')
 
@@ -234,9 +244,7 @@ def create_app(**kwargs) -> AsyncHTTPServer:
     return app
 
 
-async def main(
-    **kwargs
-) -> None:
+async def main(**kwargs) -> None:
     stop_event = asyncio.Event()
     server = create_app(**kwargs)
 
@@ -249,6 +257,15 @@ async def main(
         logger.info("Received shutdown signal")
         stop_event.set()
         await asyncio.gather(server_task, shutdown_task, return_exceptions=True)
+
+
+async def shutdown(server: AsyncHTTPServer, signal_: asyncio.Event) -> None:
+    """Handle graceful shutdown."""
+    await signal_.wait()
+    logger.info("Shutting down server...")
+    if server.server:
+        server.server.close()
+        await server.server.wait_closed()
 
 
 if __name__ == "__main__":
