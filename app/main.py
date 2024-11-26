@@ -31,6 +31,16 @@ class Route:
         return False, {}
 
 
+@dataclass
+class Request:
+    method: str
+    target: str
+    headers: Dict[str, str]
+    body: bytes
+    client_host: str
+    client_port: int
+
+
 class AsyncHTTPServer:
     def __init__(self, host: str = "localhost", port: int = 4221):
         self.host = host
@@ -59,13 +69,26 @@ class AsyncHTTPServer:
                 response_lines.append(f'{key}: {value}')
 
         response_lines.append('')  # Empty line between headers and body
-        print(f"response_lines: {response_lines}")
         response = '\r\n'.join(response_lines).encode('utf-8') + b'\r\n'
-        print(f"response: {response}")
+
         if body:
             response = response + body
 
         return response
+
+    def parse_headers(self, request: List[bytes]) -> Dict[str, str]:
+        """Parse HTTP headers from request."""
+        headers = {}
+        for line in request[1:]:  # Skip the request line
+            decoded_line = line.decode('utf-8').strip()
+            if not decoded_line:  # Empty line marks the end of headers
+                break
+
+            if ':' in decoded_line:
+                key, value = decoded_line.split(':', 1)
+                headers[key.strip().lower()] = value.strip()
+
+        return headers
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle individual client connections."""
@@ -81,19 +104,27 @@ class AsyncHTTPServer:
                 request = data.split(b'\r\n')
                 request_line = request[0].decode('utf-8')
                 method, path, _ = request_line.split(' ')
+                headers = self.parse_headers(request)
 
-                logger.info(f"Received request from {peer_info}: {request_line}")
+                logger.info(f"Received request from {peer_info}: {request}")
 
-                # Find matching route
                 routes = self.routes.get(method)
-                print(routes)
+                payload = Request(
+                    method=method,
+                    target=path,
+                    headers=headers,
+                    body=b'',
+                    client_host=peer_info[0],
+                    client_port=peer_info[1]
+                )
+
                 response = b''
                 if routes:
                     matched = False
                     for route in routes:
                         matched, params = route.match(path)
                         if matched:
-                            response = route.handler(**params)
+                            response = route.handler(requst=payload, **params)
                             break
 
                     if not matched:
@@ -153,12 +184,22 @@ def create_app() -> AsyncHTTPServer:
     app = AsyncHTTPServer()
 
     @app.route('GET', '/', ())
-    def handle_root() -> bytes:
+    def handle_root(request: Request) -> bytes:
         return app.create_response('200 OK')
 
     @app.route('GET', '/echo/{message}', ('message',))
-    def handle_echo(message: str) -> bytes:
+    def handle_echo(message: str, request: Request) -> bytes:
         body = message.encode('utf-8')
+        headers = {
+            'Content-Type': 'text/plain',
+            'Content-Length': str(len(body))
+        }
+        return app.create_response('200 OK', headers, body)
+
+    @app.route('GET', '/user-agent', ())
+    def handle_user_agent(request: Request) -> bytes:
+        user_agent = request.headers.get('user-agent', '')
+        body = user_agent.encode('utf-8')
         headers = {
             'Content-Type': 'text/plain',
             'Content-Length': str(len(body))
