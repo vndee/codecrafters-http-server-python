@@ -103,13 +103,14 @@ class AsyncHTTPServer:
                 if not data:
                     break
 
+                logger.info(f"Received request from {peer_info}: {data}")
+
                 request = data.split(b'\r\n')
                 request_line = request[0].decode('utf-8')
                 method, path, _ = request_line.split(' ')
                 headers = self.parse_headers(request)
                 body = request[request.index(b'') + 1:]
                 print(f"BODY: {body}")
-                logger.info(f"Received request from {peer_info}: {request}")
 
                 routes = self.routes.get(method)
                 payload = Request(
