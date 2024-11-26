@@ -107,7 +107,8 @@ class AsyncHTTPServer:
                 request_line = request[0].decode('utf-8')
                 method, path, _ = request_line.split(' ')
                 headers = self.parse_headers(request)
-
+                body = request[request.index(b'') + 1:]
+                print(f"BODY: {body}")
                 logger.info(f"Received request from {peer_info}: {request}")
 
                 routes = self.routes.get(method)
@@ -115,7 +116,7 @@ class AsyncHTTPServer:
                     method=method,
                     target=path,
                     headers=headers,
-                    body=b'',
+                    body=body,
                     peer_info=peer_info
                 )
 
@@ -224,7 +225,6 @@ def create_app(**kwargs) -> AsyncHTTPServer:
     def handle_post_file(filename: str, request: Request) -> bytes:
         try:
             with open(f"{app.directory}/{filename}", 'wb') as f:
-                print(request.body)
                 f.write(request.body)
                 return app.create_response('201 Created')
         except Exception:
