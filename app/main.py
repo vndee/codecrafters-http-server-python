@@ -128,6 +128,9 @@ class AsyncHTTPServer:
         """Convert HTTPResponse object to bytes."""
         response_lines = [f'HTTP/1.1 {response.status_line}']
 
+        if response.body:
+            response.headers['Content-Length'] = str(len(response.body))
+
         for key, value in response.headers.items():
             response_lines.append(f'{key}: {value}')
 
@@ -215,8 +218,7 @@ class AsyncHTTPServer:
                     request.accept_encoding
                 )
                 if response.headers.get('Content-Encoding') == 'gzip':
-                    response.body = str(gzip.compress(response.body))
-                print(f"Response headers: {response.headers} - body: {response.body}")
+                    response.body = gzip.compress(response.body)
 
                 return response
 
