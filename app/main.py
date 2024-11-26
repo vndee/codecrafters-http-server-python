@@ -14,6 +14,12 @@ class AsyncHTTPServer:
         self.host = host
         self.port = port
         self.server: Optional[asyncio.Server] = None
+        self.targets = {
+            "GET /": self.target_greet
+        }
+
+    def target_greet(self) -> bytes:
+        return b'HTTP/1.1 200 OK\r\n\r\n'
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle individual client connections."""
@@ -27,18 +33,17 @@ class AsyncHTTPServer:
                     break
 
                 request = data.split(b'\r\n')
-                # request = data.decode('utf-8')
+                method, target, protocol = request[0].split(b' ')
+                headers = {k: v for k, v in [h.split(b': ') for h in request[1:-2]]}
+
                 logger.info(f"Received request from {peer_info}: {request}")
 
-                response = (
-                    "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: text/plain\r\n"
-                    "Connection: keep-alive\r\n"
-                    "\r\n"
-                    "Hello, World!"
-                )
+                if f"{method.decode()} {target.decode()}" in self.targets:
+                    response = self.targets[f"{method.decode()} {target.decode()}"]()
+                else:
+                    response = b'HTTP/1.1 404 Not Found\r\n\r\n'
 
-                # Send response
+                writer.write(response)
                 await writer.drain()
 
         except Exception as e:
