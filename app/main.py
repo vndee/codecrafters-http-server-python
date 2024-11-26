@@ -26,7 +26,8 @@ class AsyncHTTPServer:
                 if not data:
                     break
 
-                request = data.decode('utf-8')
+                request = data.split(b'\r\n')
+                # request = data.decode('utf-8')
                 logger.info(f"Received request from {peer_info}: {request}")
 
                 response = (
