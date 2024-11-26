@@ -224,6 +224,7 @@ def create_app(**kwargs) -> AsyncHTTPServer:
     def handle_post_file(filename: str, request: Request) -> bytes:
         try:
             with open(f"{app.directory}/{filename}", 'wb') as f:
+                print(request.body)
                 f.write(request.body)
                 return app.create_response('201 Created')
         except Exception:
