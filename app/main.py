@@ -36,9 +36,8 @@ class Request:
     method: str
     target: str
     headers: Dict[str, str]
+    peer_info: Tuple[str, int]
     body: bytes
-    client_host: str
-    client_port: int
 
 
 class AsyncHTTPServer:
@@ -114,8 +113,7 @@ class AsyncHTTPServer:
                     target=path,
                     headers=headers,
                     body=b'',
-                    client_host=peer_info[0],
-                    client_port=peer_info[1]
+                    peer_info=peer_info
                 )
 
                 response = b''
@@ -124,7 +122,7 @@ class AsyncHTTPServer:
                     for route in routes:
                         matched, params = route.match(path)
                         if matched:
-                            response = route.handler(requst=payload, **params)
+                            response = route.handler(request=payload, **params)
                             break
 
                     if not matched:
