@@ -25,6 +25,7 @@ class Route:
             regex_pattern = regex_pattern.replace(f"{{{param}}}", f"(?P<{param}>[^/]+)")
 
         regex_pattern = f"^{regex_pattern}$"
+        print(f"Matching {path} against {regex_pattern}")
         match = re.match(regex_pattern, path)
 
         if match:
