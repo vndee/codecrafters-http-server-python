@@ -80,6 +80,7 @@ class CompressionHandler:
     @classmethod
     def should_compress(cls, accept_encoding: str) -> bool:
         """Determine if compression should be applied based on Accept-Encoding header."""
+        print(f"Aceept-Encoding: {accept_encoding}")
         if not accept_encoding:
             return False
         requested_encoding = accept_encoding.split(',')[0].strip().lower()
