@@ -3,9 +3,9 @@ import asyncio
 import logging
 import argparse
 
+from enum import Enum
 from dataclasses import dataclass
 from typing import Optional, Dict, Callable, Tuple, List
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,145 +14,173 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class HTTPStatus(Enum):
+    """Enum for common HTTP status codes and messages."""
+    OK = ('200 OK', 200)
+    CREATED = ('201 Created', 201)
+    NOT_FOUND = ('404 Not Found', 404)
+    SERVER_ERROR = ('500 Internal Server Error', 500)
+
+
+@dataclass
+class HTTPResponse:
+    """Represents an HTTP response with status, headers, and body."""
+    status: HTTPStatus
+    headers: Dict[str, str]
+    body: bytes = b''
+
+    @property
+    def status_line(self) -> str:
+        return self.status.value[0]
+
+
 @dataclass
 class Route:
+    """Represents a route with its pattern, handler, and parameters."""
     pattern: str
-    handler: Callable[..., bytes]
+    handler: Callable[..., HTTPResponse]
     params: Tuple[str, ...] = ()
+    _compiled_pattern: Optional[re.Pattern] = None
 
-    def match(self, path: str) -> Tuple[bool, Dict[str, str]]:
-        """Match the path against the route pattern and extract parameters."""
+    def __post_init__(self):
+        """Compile the regex pattern once during initialization."""
         regex_pattern = self.pattern
         for param in self.params:
             regex_pattern = regex_pattern.replace(f"{{{param}}}", f"(?P<{param}>[^/]+)")
+        self._compiled_pattern = re.compile(f"^{regex_pattern}$")
 
-        regex_pattern = f"^{regex_pattern}$"
-        match = re.match(regex_pattern, path)
+    def match(self, path: str) -> Tuple[bool, Dict[str, str]]:
+        """Match the path against the pre-compiled route pattern."""
+        if not self._compiled_pattern:
+            return False, {}
 
-        if match:
-            return True, match.groupdict()
-        return False, {}
+        match = self._compiled_pattern.match(path)
+        return (True, match.groupdict()) if match else (False, {})
 
 
 @dataclass
 class Request:
+    """Represents an HTTP request with all its components."""
     method: str
     target: str
     headers: Dict[str, str]
-    peer_info: Tuple[str, int]
+    peer_info: Optional[Tuple[str, int]]
     body: bytes
+
+    @property
+    def accept_encoding(self) -> str:
+        """Get the Accept-Encoding header value."""
+        return self.headers.get('accept-encoding', '')
+
+
+class CompressionHandler:
+    """Handles compression-related functionality."""
+    SUPPORTED_ENCODINGS = ['gzip']
+
+    @classmethod
+    def should_compress(cls, accept_encoding: str) -> bool:
+        """Determine if compression should be applied based on Accept-Encoding header."""
+        if not accept_encoding:
+            return False
+        requested_encoding = accept_encoding.split(',')[0].strip().lower()
+        return requested_encoding in cls.SUPPORTED_ENCODINGS
+
+    @classmethod
+    def add_compression_headers(cls, headers: Dict[str, str], accept_encoding: str) -> Dict[str, str]:
+        """Add compression-related headers if compression should be applied."""
+        if cls.should_compress(accept_encoding):
+            headers['Content-Encoding'] = 'gzip'
+        return headers
 
 
 class AsyncHTTPServer:
+    """Asynchronous HTTP server with compression support."""
+
     def __init__(self, host: str = "localhost", port: int = 4221, directory: str = ".") -> None:
         self.host = host
         self.port = port
         self.directory = directory
         self.server: Optional[asyncio.Server] = None
         self.routes: Dict[str, List[Route]] = {}
-        self.supported_encodings = ['gzip']
+        self.compression = CompressionHandler()
 
     def route(self, method: str, path: str, params: Tuple[str, ...] = ()) -> Callable:
         """Decorator to register routes with the server."""
 
-        def decorator(handler: Callable[..., bytes]) -> Callable[..., bytes]:
+        def decorator(handler: Callable[..., HTTPResponse]) -> Callable[..., HTTPResponse]:
             if method not in self.routes:
                 self.routes[method] = []
-
             self.routes[method].append(Route(path, handler, params))
             return handler
 
         return decorator
 
-    def should_compress(self, accept_encoding: str) -> bool:
-        """Check if response should be compressed based on Accept-Encoding header."""
-        if not accept_encoding:
-            return False
+    def create_response(self, response: HTTPResponse) -> bytes:
+        """Convert HTTPResponse object to bytes."""
+        response_lines = [f'HTTP/1.1 {response.status_line}']
 
-        # Split the header value and get the first encoding
-        requested_encoding = accept_encoding.split(',')[0].strip().lower()
-        return requested_encoding in self.supported_encodings
-
-    def create_response(self, status: str, headers: Dict[str, str] = None, body: bytes = b'',
-                        accept_encoding: str = None) -> bytes:
-        """Create HTTP response with headers and body."""
-        if headers is None:
-            headers = {}
-
-        if self.should_compress(accept_encoding):
-            headers['Content-Encoding'] = 'gzip'
-
-        response_lines = [f'HTTP/1.1 {status}']
-
-        for key, value in headers.items():
+        for key, value in response.headers.items():
             response_lines.append(f'{key}: {value}')
 
-        response_lines.append('')  # Empty line between headers and body
-        response = '\r\n'.join(response_lines).encode('utf-8') + b'\r\n'
+        response_lines.append('')
+        http_response = '\r\n'.join(response_lines).encode('utf-8') + b'\r\n'
 
-        if body:
-            response = response + body
+        if response.body:
+            http_response += response.body
 
-        return response
+        return http_response
 
-    def parse_headers(self, request: List[bytes]) -> Dict[str, str]:
-        """Parse HTTP headers from request."""
-        headers = {}
-        for line in request[1:]:  # Skip the request line
-            decoded_line = line.decode('utf-8').strip()
-            if not decoded_line:  # Empty line marks the end of headers
-                break
+    async def parse_request(self, reader: asyncio.StreamReader) -> Optional[Request]:
+        """Parse incoming HTTP request."""
+        try:
+            data = await reader.read(1024)
+            if not data:
+                return None
 
-            if ':' in decoded_line:
-                key, value = decoded_line.split(':', 1)
-                headers[key.strip().lower()] = value.strip()
+            request_parts = data.split(b'\r\n')
+            request_line = request_parts[0].decode('utf-8')
+            method, path, _ = request_line.split(' ')
 
-        return headers
+            headers = {}
+            current_line = 1
+            while current_line < len(request_parts):
+                line = request_parts[current_line].decode('utf-8').strip()
+                if not line:
+                    break
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    headers[key.strip().lower()] = value.strip()
+                current_line += 1
+
+            body = b''
+            if b'\r\n\r\n' in data:
+                body = data.split(b'\r\n\r\n', 1)[1]
+
+            return Request(
+                method=method,
+                target=path,
+                headers=headers,
+                body=body,
+                peer_info=None  # Will be set in handle_client
+            )
+        except Exception as e:
+            logger.error(f"Error parsing request: {e}")
+            return None
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle individual client connections."""
         peer_info = writer.get_extra_info('peername')
         try:
-            logger.info(f"New connection from {peer_info}")
+            request = await self.parse_request(reader)
+            if not request:
+                return
 
-            while True:
-                data = await reader.read(1024)
-                if not data:
-                    break
+            request.peer_info = peer_info
+            logger.info(f"Received request from {peer_info}: {request.target}")
 
-                logger.info(f"Received request from {peer_info}: {data}")
-
-                request = data.split(b'\r\n')
-                request_line = request[0].decode('utf-8')
-                method, path, _ = request_line.split(' ')
-                headers = self.parse_headers(request)
-                body = data.split(b'\r\n\r\n', 1)[1] if b'\r\n\r\n' in data else b''
-
-                routes = self.routes.get(method)
-                payload = Request(
-                    method=method,
-                    target=path,
-                    headers=headers,
-                    body=body,
-                    peer_info=peer_info
-                )
-
-                response = b''
-                if routes:
-                    matched = False
-                    for route in routes:
-                        matched, params = route.match(path)
-                        if matched:
-                            response = route.handler(request=payload, **params)
-                            break
-
-                    if not matched:
-                        response = self.create_response('404 Not Found')
-                else:
-                    response = self.create_response('404 Not Found')
-
-                writer.write(response)
-                await writer.drain()
+            response = await self.route_request(request)
+            writer.write(self.create_response(response))
+            await writer.drain()
 
         except Exception as e:
             logger.error(f"Error handling client {peer_info}: {e}")
@@ -164,6 +192,23 @@ class AsyncHTTPServer:
             except Exception as e:
                 logger.error(f"Error closing connection for {peer_info}: {e}")
 
+    async def route_request(self, request: Request) -> HTTPResponse:
+        """Route the request to appropriate handler."""
+        routes = self.routes.get(request.method, [])
+
+        for route in routes:
+            matched, params = route.match(request.target)
+            if matched:
+                response = route.handler(request=request, **params)
+
+                response.headers = self.compression.add_compression_headers(
+                    response.headers,
+                    request.accept_encoding
+                )
+                return response
+
+        return HTTPResponse(HTTPStatus.NOT_FOUND, {})
+
     async def start_server(self) -> None:
         """Start the HTTP server."""
         try:
@@ -171,12 +216,10 @@ class AsyncHTTPServer:
                 self.handle_client,
                 self.host,
                 self.port,
-                reuse_port=True,
-                start_serving=True
+                reuse_port=True
             )
 
             logger.info(f"Server listening on {self.host}:{self.port}")
-
             async with self.server:
                 await self.server.serve_forever()
 
@@ -194,32 +237,29 @@ def create_app(**kwargs) -> AsyncHTTPServer:
     app = AsyncHTTPServer(**kwargs)
 
     @app.route('GET', '/', ())
-    def handle_root(request: Request) -> bytes:
-        return app.create_response('200 OK')
+    def handle_root(request: Request) -> HTTPResponse:
+        return HTTPResponse(HTTPStatus.OK, {})
 
     @app.route('GET', '/echo/{message}', ('message',))
-    def handle_echo(message: str, request: Request) -> bytes:
+    def handle_echo(message: str, request: Request) -> HTTPResponse:
         body = message.encode('utf-8')
         headers = {
             'Content-Type': 'text/plain',
             'Content-Length': str(len(body))
         }
-        accept_encoding = request.headers.get('accept-encoding')
-        return app.create_response('200 OK', headers, body, accept_encoding)
+        return HTTPResponse(HTTPStatus.OK, headers, body)
 
     @app.route('GET', '/user-agent', ())
-    def handle_user_agent(request: Request) -> bytes:
-        user_agent = request.headers.get('user-agent', '')
-        body = user_agent.encode('utf-8')
+    def handle_user_agent(request: Request) -> HTTPResponse:
+        body = request.headers.get('user-agent', '').encode('utf-8')
         headers = {
             'Content-Type': 'text/plain',
             'Content-Length': str(len(body))
         }
-        accept_encoding = request.headers.get('accept-encoding')
-        return app.create_response('200 OK', headers, body, accept_encoding)
+        return HTTPResponse(HTTPStatus.OK, headers, body)
 
     @app.route('GET', '/files/{filename}', ('filename',))
-    def handle_file(filename: str, request: Request) -> bytes:
+    def handle_file(filename: str, request: Request) -> HTTPResponse:
         try:
             with open(f"{app.directory}/{filename}", 'rb') as f:
                 body = f.read()
@@ -227,21 +267,29 @@ def create_app(**kwargs) -> AsyncHTTPServer:
                     'Content-Type': 'application/octet-stream',
                     'Content-Length': str(len(body))
                 }
-                accept_encoding = request.headers.get('accept-encoding')
-                return app.create_response('200 OK', headers, body, accept_encoding)
+                return HTTPResponse(HTTPStatus.OK, headers, body)
         except FileNotFoundError:
-            return app.create_response('404 Not Found')
+            return HTTPResponse(HTTPStatus.NOT_FOUND, {})
 
     @app.route('POST', '/files/{filename}', ('filename',))
-    def handle_post_file(filename: str, request: Request) -> bytes:
+    def handle_post_file(filename: str, request: Request) -> HTTPResponse:
         try:
             with open(f"{app.directory}/{filename}", 'wb') as f:
                 f.write(request.body)
-                return app.create_response('201 Created')
+                return HTTPResponse(HTTPStatus.CREATED, {})
         except Exception:
-            return app.create_response('500 Internal Server Error')
+            return HTTPResponse(HTTPStatus.SERVER_ERROR, {})
 
     return app
+
+
+async def shutdown(server: AsyncHTTPServer, signal_: asyncio.Event) -> None:
+    """Handle graceful shutdown."""
+    await signal_.wait()
+    logger.info("Shutting down server...")
+    if server.server:
+        server.server.close()
+        await server.server.wait_closed()
 
 
 async def main(**kwargs) -> None:
@@ -259,20 +307,11 @@ async def main(**kwargs) -> None:
         await asyncio.gather(server_task, shutdown_task, return_exceptions=True)
 
 
-async def shutdown(server: AsyncHTTPServer, signal_: asyncio.Event) -> None:
-    """Handle graceful shutdown."""
-    await signal_.wait()
-    logger.info("Shutting down server...")
-    if server.server:
-        server.server.close()
-        await server.server.wait_closed()
-
-
 if __name__ == "__main__":
-    args_parser = argparse.ArgumentParser()
-    args_parser.add_argument("--host", default="localhost", help="Host to listen on")
-    args_parser.add_argument("--port", type=int, default=4221, help="Port to listen on")
-    args_parser.add_argument("--directory", default=".", help="Directory to serve")
-    args = args_parser.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="localhost", help="Host to listen on")
+    parser.add_argument("--port", type=int, default=4221, help="Port to listen on")
+    parser.add_argument("--directory", default=".", help="Directory to serve")
+    args = parser.parse_args()
 
     asyncio.run(main(**vars(args)))
