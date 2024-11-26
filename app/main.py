@@ -1,4 +1,5 @@
 import re
+import gzip
 import asyncio
 import logging
 import argparse
@@ -85,7 +86,6 @@ class CompressionHandler:
 
         requested_encoding = [x.strip().lower() for x in accept_encoding.split(',')]
 
-        print(f"Request-Encoding: {requested_encoding}")
         for encoding in cls.SUPPORTED_ENCODINGS:
             if encoding in requested_encoding:
                 return encoding
@@ -98,6 +98,7 @@ class CompressionHandler:
         encoding = cls.should_compress(accept_encoding)
         if encoding:
             headers['Content-Encoding'] = encoding
+
         return headers
 
 
@@ -213,6 +214,9 @@ class AsyncHTTPServer:
                     response.headers,
                     request.accept_encoding
                 )
+                if response.headers.get('Content-Encoding') == 'gzip':
+                    response.body = gzip.compress(response.body)
+
                 return response
 
         return HTTPResponse(HTTPStatus.NOT_FOUND, {})
