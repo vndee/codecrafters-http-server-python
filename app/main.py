@@ -25,7 +25,7 @@ class Route:
             regex_pattern = regex_pattern.replace(f"{{{param}}}", f"(?P<{param}>[^/]+)")
 
         regex_pattern = f"^{regex_pattern}$"
-        print(f"Matching {path} against {regex_pattern}")
+        # print(f"Matching {path} against {regex_pattern}")
         match = re.match(regex_pattern, path)
 
         if match:
@@ -219,6 +219,15 @@ def create_app(**kwargs) -> AsyncHTTPServer:
                 return app.create_response('200 OK', headers, body)
         except FileNotFoundError:
             return app.create_response('404 Not Found')
+
+    @app.route('POST', '/files/{filename}', ('filename',))
+    def handle_post_file(filename: str, request: Request) -> bytes:
+        try:
+            with open(f"{app.directory}/{filename}", 'wb') as f:
+                f.write(request.body)
+                return app.create_response('201 Created')
+        except Exception:
+            return app.create_response('500 Internal Server Error')
 
     return app
 
