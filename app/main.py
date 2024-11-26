@@ -1,6 +1,8 @@
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Dict, Callable, Tuple
+from dataclasses import dataclass
+import re
 
 logging.basicConfig(
     level=logging.INFO,
@@ -9,17 +11,57 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class Route:
+    pattern: str
+    handler: Callable[..., bytes]
+    params: Tuple[str, ...] = ()
+
+    def match(self, path: str) -> Tuple[bool, Dict[str, str]]:
+        """Match the path against the route pattern and extract parameters."""
+        regex_pattern = self.pattern
+        for param in self.params:
+            regex_pattern = regex_pattern.replace(f"{{{param}}}", f"(?P<{param}>[^/]+)")
+
+        regex_pattern = f"^{regex_pattern}$"
+        match = re.match(regex_pattern, path)
+
+        if match:
+            return True, match.groupdict()
+        return False, {}
+
+
 class AsyncHTTPServer:
     def __init__(self, host: str = "localhost", port: int = 4221):
         self.host = host
         self.port = port
         self.server: Optional[asyncio.Server] = None
-        self.targets = {
-            "GET /": self.target_greet
-        }
+        self.routes: Dict[str, Route] = {}
 
-    def target_greet(self) -> bytes:
-        return b'HTTP/1.1 200 OK\r\n\r\n'
+    def route(self, method: str, path: str, params: Tuple[str, ...] = ()) -> Callable:
+        """Decorator to register routes with the server."""
+
+        def decorator(handler: Callable[..., bytes]) -> Callable[..., bytes]:
+            self.routes[method] = Route(path, handler, params)
+            return handler
+
+        return decorator
+
+    def create_response(self, status: str, headers: Dict[str, str] = None, body: bytes = b'') -> bytes:
+        """Create HTTP response with headers and body."""
+        response_lines = [f'HTTP/1.1 {status}']
+
+        if headers:
+            for key, value in headers.items():
+                response_lines.append(f'{key}: {value}')
+
+        response_lines.append('')  # Empty line between headers and body
+        response = '\r\n'.join(response_lines).encode('utf-8')
+
+        if body:
+            response = response + b'\r\n' + body
+
+        return response
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle individual client connections."""
@@ -33,15 +75,22 @@ class AsyncHTTPServer:
                     break
 
                 request = data.split(b'\r\n')
-                method, target, protocol = request[0].split(b' ')
-                headers = {k: v for k, v in [h.split(b': ') for h in request[1:-2]]}
+                request_line = request[0].decode('utf-8')
+                method, path, _ = request_line.split(' ')
 
-                logger.info(f"Received request from {peer_info}: {request}")
+                logger.info(f"Received request from {peer_info}: {request_line}")
 
-                if f"{method.decode()} {target.decode()}" in self.targets:
-                    response = self.targets[f"{method.decode()} {target.decode()}"]()
+                # Find matching route
+                route = self.routes.get(method)
+                print(route)
+                if route:
+                    matched, params = route.match(path)
+                    if matched:
+                        response = route.handler(**params)
+                    else:
+                        response = self.create_response('404 Not Found')
                 else:
-                    response = b'HTTP/1.1 404 Not Found\r\n\r\n'
+                    response = self.create_response('404 Not Found')
 
                 writer.write(response)
                 await writer.drain()
@@ -69,7 +118,6 @@ class AsyncHTTPServer:
 
             logger.info(f"Server listening on {self.host}:{self.port}")
 
-            # Keep the server running
             async with self.server:
                 await self.server.serve_forever()
 
@@ -91,9 +139,29 @@ async def shutdown(server: AsyncHTTPServer, signal_: asyncio.Event) -> None:
         await server.server.wait_closed()
 
 
+def create_app() -> AsyncHTTPServer:
+    """Create and configure the server application."""
+    app = AsyncHTTPServer()
+
+    @app.route('GET', '/', ())
+    def handle_root() -> bytes:
+        return app.create_response('200 OK')
+
+    @app.route('GET', '/echo/{message}', ('message',))
+    def handle_echo(message: str) -> bytes:
+        body = message.encode('utf-8')
+        headers = {
+            'Content-Type': 'text/plain',
+            'Content-Length': str(len(body))
+        }
+        return app.create_response('200 OK', headers, body)
+
+    return app
+
+
 async def main() -> None:
     stop_event = asyncio.Event()
-    server = AsyncHTTPServer()
+    server = create_app()
 
     server_task = asyncio.create_task(server.start_server())
     shutdown_task = asyncio.create_task(shutdown(server, stop_event))
