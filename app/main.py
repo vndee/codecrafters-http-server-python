@@ -109,7 +109,7 @@ class AsyncHTTPServer:
                 request_line = request[0].decode('utf-8')
                 method, path, _ = request_line.split(' ')
                 headers = self.parse_headers(request)
-                body = request[request.index(b'') + 1:]
+                body = data.split(b'\r\n\r\n', 1)[1] if b'\r\n\r\n' in data else b''
                 print(f"BODY: {body}")
 
                 routes = self.routes.get(method)
