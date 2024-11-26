@@ -130,6 +130,8 @@ class AsyncHTTPServer:
 
         if response.body:
             response.headers['Content-Length'] = str(len(response.body))
+        else:
+            response.headers['Content-Length'] = '0'
 
         for key, value in response.headers.items():
             response_lines.append(f'{key}: {value}')
@@ -260,7 +262,6 @@ def create_app(**kwargs) -> AsyncHTTPServer:
         body = message.encode('utf-8')
         headers = {
             'Content-Type': 'text/plain',
-            'Content-Length': str(len(body))
         }
         return HTTPResponse(HTTPStatus.OK, headers, body)
 
@@ -269,7 +270,6 @@ def create_app(**kwargs) -> AsyncHTTPServer:
         body = request.headers.get('user-agent', '').encode('utf-8')
         headers = {
             'Content-Type': 'text/plain',
-            'Content-Length': str(len(body))
         }
         return HTTPResponse(HTTPStatus.OK, headers, body)
 
@@ -280,7 +280,6 @@ def create_app(**kwargs) -> AsyncHTTPServer:
                 body = f.read()
                 headers = {
                     'Content-Type': 'application/octet-stream',
-                    'Content-Length': str(len(body))
                 }
                 return HTTPResponse(HTTPStatus.OK, headers, body)
         except FileNotFoundError:
