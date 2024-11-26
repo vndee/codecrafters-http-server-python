@@ -214,6 +214,7 @@ class AsyncHTTPServer:
                     response.headers,
                     request.accept_encoding
                 )
+                print(f"Response headers: {response.headers} - body: {response.body}")
                 if response.headers.get('Content-Encoding') == 'gzip':
                     response.body = gzip.compress(response.body)
 
