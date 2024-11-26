@@ -83,7 +83,7 @@ class CompressionHandler:
         if not accept_encoding:
             return None
 
-        requested_encoding = accept_encoding.split(',')[0].strip().lower()
+        requested_encoding = [x.strip().lower() for x in accept_encoding.split(',')]
 
         print(f"Request-Encoding: {requested_encoding}")
         for encoding in cls.SUPPORTED_ENCODINGS:
