@@ -78,19 +78,24 @@ class CompressionHandler:
     SUPPORTED_ENCODINGS = ['gzip']
 
     @classmethod
-    def should_compress(cls, accept_encoding: str) -> bool:
+    def should_compress(cls, accept_encoding: str) -> str | None:
         """Determine if compression should be applied based on Accept-Encoding header."""
-        print(f"Aceept-Encoding: {accept_encoding}")
+        print(f"Accept-Encoding: {accept_encoding}")
         if not accept_encoding:
-            return False
+            return None
         requested_encoding = accept_encoding.split(',')[0].strip().lower()
-        return requested_encoding in cls.SUPPORTED_ENCODINGS
+        for encoding in cls.SUPPORTED_ENCODINGS:
+            if encoding in requested_encoding:
+                return encoding
+
+        return None
 
     @classmethod
     def add_compression_headers(cls, headers: Dict[str, str], accept_encoding: str) -> Dict[str, str]:
         """Add compression-related headers if compression should be applied."""
-        if cls.should_compress(accept_encoding):
-            headers['Content-Encoding'] = 'gzip'
+        encoding = cls.should_compress(accept_encoding)
+        if encoding:
+            headers['Content-Encoding'] = encoding
         return headers
 
 
