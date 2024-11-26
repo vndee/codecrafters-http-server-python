@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import argparse
 from typing import Optional, Dict, Callable, Tuple, List
 from dataclasses import dataclass
 import re
@@ -41,9 +42,10 @@ class Request:
 
 
 class AsyncHTTPServer:
-    def __init__(self, host: str = "localhost", port: int = 4221):
+    def __init__(self, host: str = "localhost", port: int = 4221, directory: str = ".") -> None:
         self.host = host
         self.port = port
+        self.directory = directory
         self.server: Optional[asyncio.Server] = None
         self.routes: Dict[str, List[Route]] = {}
 
@@ -177,9 +179,9 @@ async def shutdown(server: AsyncHTTPServer, signal_: asyncio.Event) -> None:
         await server.server.wait_closed()
 
 
-def create_app() -> AsyncHTTPServer:
+def create_app(**kwargs) -> AsyncHTTPServer:
     """Create and configure the server application."""
-    app = AsyncHTTPServer()
+    app = AsyncHTTPServer(**kwargs)
 
     @app.route('GET', '/', ())
     def handle_root(request: Request) -> bytes:
@@ -204,12 +206,27 @@ def create_app() -> AsyncHTTPServer:
         }
         return app.create_response('200 OK', headers, body)
 
+    @app.route('GET', '/files/{filename}', ('filename',))
+    def handle_file(filename: str, request: Request) -> bytes:
+        try:
+            with open(f"{app.directory}/{filename}", 'rb') as f:
+                body = f.read()
+                headers = {
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Length': str(len(body))
+                }
+                return app.create_response('200 OK', headers, body)
+        except FileNotFoundError:
+            return app.create_response('404 Not Found')
+
     return app
 
 
-async def main() -> None:
+async def main(
+    **kwargs
+) -> None:
     stop_event = asyncio.Event()
-    server = create_app()
+    server = create_app(**kwargs)
 
     server_task = asyncio.create_task(server.start_server())
     shutdown_task = asyncio.create_task(shutdown(server, stop_event))
@@ -223,4 +240,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    args_parser = argparse.ArgumentParser()
+    args_parser.add_argument("--host", default="localhost", help="Host to listen on")
+    args_parser.add_argument("--port", type=int, default=4221, help="Port to listen on")
+    args_parser.add_argument("--directory", default=".", help="Directory to serve")
+    args = args_parser.parse_args()
+
+    asyncio.run(main(**vars(args)))
