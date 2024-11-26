@@ -60,10 +60,10 @@ class AsyncHTTPServer:
 
         response_lines.append('')  # Empty line between headers and body
         print(f"response_lines: {response_lines}")
-        response = '\r\n'.join(response_lines).encode('utf-8')
+        response = '\r\n'.join(response_lines).encode('utf-8') + b'\r\n'
         print(f"response: {response}")
         if body:
-            response = response + b'\r\n' + body
+            response = response + body
 
         return response
 
