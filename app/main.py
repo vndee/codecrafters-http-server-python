@@ -2,7 +2,6 @@ import asyncio
 import logging
 from typing import Optional
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -23,15 +22,13 @@ class AsyncHTTPServer:
             logger.info(f"New connection from {peer_info}")
 
             while True:
-                # Read HTTP request
                 data = await reader.read(1024)
                 if not data:
                     break
 
                 request = data.decode('utf-8')
-                logger.info(f"Received request from {peer_info}:\n{request}")
+                logger.info(f"Received request from {peer_info}: {request}")
 
-                # Create HTTP response
                 response = (
                     "HTTP/1.1 200 OK\r\n"
                     "Content-Type: text/plain\r\n"
@@ -41,7 +38,6 @@ class AsyncHTTPServer:
                 )
 
                 # Send response
-                writer.write(response.encode('utf-8'))
                 await writer.drain()
 
         except Exception as e:
@@ -90,18 +86,13 @@ async def shutdown(server: AsyncHTTPServer, signal_: asyncio.Event) -> None:
 
 
 async def main() -> None:
-    # Create shutdown event
     stop_event = asyncio.Event()
-
-    # Create and start server
     server = AsyncHTTPServer()
 
-    # Create tasks
     server_task = asyncio.create_task(server.start_server())
     shutdown_task = asyncio.create_task(shutdown(server, stop_event))
 
     try:
-        # Wait for either task to complete
         await asyncio.gather(server_task, shutdown_task)
     except KeyboardInterrupt:
         logger.info("Received shutdown signal")
